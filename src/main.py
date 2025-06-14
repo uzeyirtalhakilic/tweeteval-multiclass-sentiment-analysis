@@ -1,137 +1,106 @@
 """
-Duygu analizi ana programı.
-Bu program, duygu analizi modelinin eğitilmesi ve değerlendirilmesi için gerekli adımları içerir.
+Tweet_eval veri seti için duygu analizi ana programı.
+Bu modül, veri yükleme, model eğitimi ve değerlendirme adımlarını içerir.
 """
 
+import logging
+import os
 import pandas as pd
-import numpy as np
+from datasets import load_dataset
+from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.model_selection import train_test_split
-from preprocessing import clean_text, remove_stopwords
-from model import train_logistic_regression, save_model, predict_sentiment
-from evaluation import evaluate_model, cross_validate_model
+from model import get_models, train_model, save_model, predict_sentiment, load_model
+from evaluation import evaluate_model, cross_validate_model, compare_models
 
-def convert_labels(df):
-    """
-    Sayısal etiketleri metin etiketlerine dönüştürür.
-    
-    Parametreler:
-        df: Etiketleri dönüştürülecek veri çerçevesi
-        
-    Dönüş:
-        df: Etiketleri dönüştürülmüş veri çerçevesi
-        
-    Not:
-        0 -> negative
-        2 -> neutral
-        4 -> positive
-    """
-    # Sayısal etiketleri metin etiketlerine dönüştür
-    label_map = {0: 'negative', 2: 'neutral', 4: 'positive'}
-    df['sentiment_text'] = df['sentiment'].map(label_map)
-    return df
+# Logging ayarları
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 def load_data():
     """
-    Eğitim veri setini yükler.
+    Tweet_eval veri setini yükler ve pandas DataFrame'e dönüştürür.
     
-    Dönüş:
-        df: Eğitim veri seti
-        
-    Not:
-        - Veri seti CSV formatında olmalıdır
-        - Sütunlar: sentiment, id, date, query, user, text
+    Returns:
+        train_data: Eğitim veri seti
+        test_data: Test veri seti
     """
-    # Eğitim veri setini yükle
-    df = pd.read_csv('data/training.1600000.processed.noemoticon.csv', 
-                     encoding='latin-1',
-                     names=['sentiment', 'id', 'date', 'query', 'user', 'text'])
+    logging.info("Veri seti yükleniyor...")
+    dataset = load_dataset("tweet_eval", "sentiment")
     
-    # Etiketleri dönüştür
-    df = convert_labels(df)
+    # Veri setini pandas DataFrame'e dönüştür
+    train_data = pd.DataFrame(dataset['train'])
+    test_data = pd.DataFrame(dataset['test'])
     
-    return df
-
-def preprocess_data(df):
-    """
-    Veri setini ön işleme adımlarından geçirir.
+    logging.info(f"Eğitim seti boyutu: {len(train_data)}")
+    logging.info(f"Test seti boyutu: {len(test_data)}")
     
-    Parametreler:
-        df: İşlenecek veri çerçevesi
-        
-    Dönüş:
-        df: İşlenmiş veri çerçevesi
-        
-    Yapılan işlemler:
-        1. Metin temizleme
-        2. Gereksiz kelimeleri kaldırma
-    """
-    # Metinleri temizle
-    df['cleaned_text'] = df['text'].apply(clean_text)
-    
-    # Gereksiz kelimeleri kaldır
-    df['processed_text'] = df['cleaned_text'].apply(remove_stopwords)
-    
-    return df
+    return train_data, test_data
 
 def main():
     """
     Ana program akışı.
-    
-    Adımlar:
-        1. Veri yükleme
-        2. Veri ön işleme
-        3. Model eğitimi
-        4. Model değerlendirme
-        5. Örnek tahminler
     """
     # Veri setini yükle
-    print("Veri seti yükleniyor...")
-    df = load_data()
+    train_data, test_data = load_data()
     
-    # Verileri ön işle
-    print("Veriler ön işleniyor...")
-    df = preprocess_data(df)
+    # TF-IDF vektörleştirici oluştur
+    vectorizer = TfidfVectorizer(max_features=5000)
+    X_train = vectorizer.fit_transform(train_data['text'])
+    X_test = vectorizer.transform(test_data['text'])
+    y_train = train_data['label']
+    y_test = test_data['label']
     
-    # Veriyi eğitim ve test setlerine böl
-    X_train, X_test, y_train, y_test = train_test_split(
-        df['processed_text'], 
-        df['sentiment_text'],
-        test_size=0.2,
-        random_state=42
-    )
+    # Modelleri eğit ve değerlendir
+    models = get_models()
+    results = {}
     
-    # Modeli eğit
-    print("Model eğitiliyor...")
-    model, vectorizer = train_logistic_regression(X_train, y_train)
+    for model_name, model_info in models.items():
+        # Modeli eğit
+        model = train_model(X_train, y_train, model_name, 
+                          model_info['model'], model_info['params'])
+        
+        # Modeli kaydet
+        save_model(model, vectorizer, model_name.lower().replace(' ', '_'))
+        
+        # Test seti üzerinde tahminler yap
+        y_pred = model.predict(X_test)
+        
+        # Modeli değerlendir
+        report = evaluate_model(y_test, y_pred, model_name)
+        results[model_name] = report
+        
+        # Çapraz doğrulama
+        logging.info(f"{model_name} için çapraz doğrulama yapılıyor...")
+        cross_validate_model(model, X_train, y_train)
     
-    # Modeli kaydet
-    print("Model kaydediliyor...")
-    save_model(model, vectorizer)
+    # Modelleri karşılaştır
+    logging.info("Modeller karşılaştırılıyor...")
+    comparison = compare_models(results)
+    print("\nModel Karşılaştırma Tablosu:")
+    print(comparison)
     
-    # Test seti üzerinde değerlendir
-    print("\nTest seti üzerinde değerlendirme yapılıyor...")
-    y_test_pred = model.predict(vectorizer.transform(X_test))
-    evaluate_model(y_test, y_test_pred, labels=['negative', 'neutral', 'positive'])
+    # En iyi modeli seç
+    best_model = comparison.loc[comparison['F1-Score'].idxmax()]
+    print(f"\nEn iyi model: {best_model['Model']}")
+    print(f"F1-Skoru: {best_model['F1-Score']:.3f}")
     
-    # Çapraz doğrulama yap
-    print("\nÇapraz doğrulama yapılıyor...")
-    cross_validate_model(model, vectorizer.transform(X_train), y_train)
-    
-    # Örnek tahminler
-    print("\nÖrnek tahminler:")
+    # Örnek tahminler yap
     example_texts = [
         "I love this product! It's amazing!",
         "This is okay, nothing special.",
-        "I hate this product, it's terrible!"
+        "I hate this, it's terrible!"
     ]
     
+    # En iyi modeli yükle
+    best_model_name = best_model['Model'].lower().replace(' ', '_')
+    model, vectorizer = load_model(best_model_name)
+    
+    print("\nÖrnek Tahminler (En İyi Model):")
     for text in example_texts:
-        cleaned_text = clean_text(text)
-        processed_text = remove_stopwords(cleaned_text)
-        prediction, probability = predict_sentiment(processed_text, model, vectorizer)
+        prediction, probability = predict_sentiment(model, vectorizer, text)
+        sentiment = {0: 'negative', 1: 'neutral', 2: 'positive'}[prediction]
         print(f"\nMetin: {text}")
-        print(f"Tahmin: {prediction}")
-        print(f"Güven: {max(probability):.2f}")
+        print(f"Tahmin: {sentiment}")
+        print(f"Olasılıklar: {probability}")
 
 if __name__ == "__main__":
     main() 

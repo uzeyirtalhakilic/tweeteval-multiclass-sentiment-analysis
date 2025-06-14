@@ -1,97 +1,168 @@
 """
-Duygu analizi modeli modülü.
-Bu modül, metin sınıflandırma modelinin oluşturulması, eğitilmesi ve kullanılması için gerekli fonksiyonları içerir.
+Tweet_eval veri seti için duygu analizi modelleri.
 """
 
-from sklearn.linear_model import LogisticRegression
-from sklearn.feature_extraction.text import TfidfVectorizer
+import logging
 import joblib
 import os
+from sklearn.linear_model import LogisticRegression
+from sklearn.svm import LinearSVC
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.naive_bayes import MultinomialNB
+from sklearn.neural_network import MLPClassifier
+from sklearn.model_selection import GridSearchCV
 
-def train_logistic_regression(X_train, y_train):
-    """
-    Lojistik regresyon modelini eğitir.
-    
-    Parametreler:
-        X_train: Eğitim verileri (metin)
-        y_train: Eğitim etiketleri (duygu sınıfları)
-        
-    Dönüş:
-        tuple: (eğitilmiş model, vektörizer)
-        
-    Not:
-        - TF-IDF vektörizer: Metinleri sayısal özelliklere dönüştürür
-        - Lojistik regresyon: Çok sınıflı sınıflandırma için kullanılır
-    """
-    # TF-IDF vektörizer oluştur (en fazla 5000 özellik)
-    vectorizer = TfidfVectorizer(max_features=5000)
-    
-    # Metinleri vektörlere dönüştür
-    X_train_vec = vectorizer.fit_transform(X_train)
-    
-    # Çok sınıflı lojistik regresyon modeli oluştur
-    model = LogisticRegression(max_iter=1000, multi_class='multinomial')
-    
-    # Modeli eğit
-    model.fit(X_train_vec, y_train)
-    
-    return model, vectorizer
+# Logging ayarları
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-def predict_sentiment(text, model, vectorizer):
+def get_models():
     """
-    Verilen metnin duygu durumunu tahmin eder.
+    Kullanılacak modelleri ve hiperparametrelerini döndürür.
     
-    Parametreler:
-        text (str): Tahmin yapılacak metin
+    Returns:
+        Modeller ve hiperparametreleri
+    """
+    models = {
+        'Logistic Regression': {
+            'model': LogisticRegression(),
+            'params': {
+                'C': [0.1, 1, 10],
+                'solver': ['lbfgs'],
+                'max_iter': [1000]
+            }
+        },
+        'SVM': {
+            'model': LinearSVC(dual=False),
+            'params': {
+                'C': [0.1, 1, 10],
+                'max_iter': [1000]
+            }
+        },
+        'Random Forest': {
+            'model': RandomForestClassifier(),
+            'params': {
+                'n_estimators': [100, 200],
+                'max_depth': [10, 20],
+                'min_samples_split': [2, 5]
+            }
+        },
+        'Naive Bayes': {
+            'model': MultinomialNB(),
+            'params': {
+                'alpha': [0.1, 1.0, 10.0]
+            }
+        },
+        'Neural Network': {
+            'model': MLPClassifier(),
+            'params': {
+                'hidden_layer_sizes': [(100,), (100, 50)],
+                'activation': ['relu'],
+                'alpha': [0.0001, 0.001]
+            }
+        }
+    }
+    return models
+
+def train_model(X_train, y_train, model_name, model, params):
+    """
+    Belirtilen modeli eğitir ve en iyi hiperparametreleri bulur.
+    
+    Args:
+        X_train: Eğitim verileri
+        y_train: Eğitim etiketleri
+        model_name: Model adı
+        model: Model nesnesi
+        params: Hiperparametreler
+        
+    Returns:
+        En iyi model
+    """
+    logging.info(f"{model_name} modeli eğitiliyor...")
+    
+    # Grid arama ile en iyi parametreleri bul
+    grid_search = GridSearchCV(
+        model, params, cv=3, n_jobs=-1, 
+        scoring='accuracy', verbose=1
+    )
+    grid_search.fit(X_train, y_train)
+    
+    logging.info(f"En iyi parametreler: {grid_search.best_params_}")
+    logging.info(f"En iyi skor: {grid_search.best_score_:.3f}")
+    
+    return grid_search.best_estimator_
+
+def predict_sentiment(model, vectorizer, text):
+    """
+    Verilen metin için duygu tahmini yapar.
+    
+    Args:
         model: Eğitilmiş model
-        vectorizer: Eğitilmiş vektörizer
+        vectorizer: TF-IDF vektörleştirici
+        text: Tahmin yapılacak metin
         
-    Dönüş:
-        tuple: (tahmin edilen sınıf, sınıf olasılıkları)
+    Returns:
+        Tahmin edilen duygu (0: negatif, 1: nötr, 2: pozitif)
+        Duygu olasılıkları
     """
-    # Metni vektöre dönüştür
-    text_vec = vectorizer.transform([text])
+    text_tfidf = vectorizer.transform([text])
+    prediction = model.predict(text_tfidf)[0]
     
-    # Tahmin yap
-    prediction = model.predict(text_vec)
+    # LinearSVC için olasılık hesaplama
+    if hasattr(model, 'predict_proba'):
+        probability = model.predict_proba(text_tfidf)[0]
+    else:
+        # LinearSVC için olasılık hesaplama
+        decision_function = model.decision_function(text_tfidf)
+        probability = decision_function[0]
+        # Min-max normalizasyonu
+        probability = (probability - probability.min()) / (probability.max() - probability.min())
     
-    # Sınıf olasılıklarını hesapla
-    probability = model.predict_proba(text_vec)
-    
-    return prediction[0], probability[0]
+    return prediction, probability
 
-def save_model(model, vectorizer, model_path='models'):
+def save_model(model, vectorizer, model_name):
     """
-    Eğitilmiş modeli ve vektörizeri kaydeder.
+    Modeli ve vektörleştiriciyi kaydeder.
     
-    Parametreler:
+    Args:
         model: Kaydedilecek model
-        vectorizer: Kaydedilecek vektörizer
-        model_path (str): Kayıt dizini (varsayılan: 'models')
+        vectorizer: Kaydedilecek vektörleştirici
+        model_name: Model dosyasının adı
     """
-    # Kayıt dizinini oluştur (yoksa)
-    os.makedirs(model_path, exist_ok=True)
+    # Models dizinini oluştur
+    models_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "models")
+    os.makedirs(models_dir, exist_ok=True)
     
-    # Modeli kaydet
-    joblib.dump(model, os.path.join(model_path, 'sentiment_model.joblib'))
+    # Model ve vektörleştiriciyi kaydet
+    model_path = os.path.join(models_dir, f"{model_name}.joblib")
+    vectorizer_path = os.path.join(models_dir, f"{model_name}_vectorizer.joblib")
     
-    # Vektörizeri kaydet
-    joblib.dump(vectorizer, os.path.join(model_path, 'vectorizer.joblib'))
+    joblib.dump(model, model_path)
+    joblib.dump(vectorizer, vectorizer_path)
+    
+    logging.info(f"Model kaydedildi: {model_path}")
+    logging.info(f"Vektörleştirici kaydedildi: {vectorizer_path}")
 
-def load_model(model_path='models'):
+def load_model(model_name):
     """
-    Kaydedilmiş modeli ve vektörizeri yükler.
+    Kaydedilmiş modeli ve vektörleştiriciyi yükler.
     
-    Parametreler:
-        model_path (str): Model dizini (varsayılan: 'models')
+    Args:
+        model_name: Model dosyasının adı
         
-    Dönüş:
-        tuple: (yüklenen model, yüklenen vektörizer)
+    Returns:
+        Yüklenen model ve vektörleştirici
     """
-    # Modeli yükle
-    model = joblib.load(os.path.join(model_path, 'sentiment_model.joblib'))
+    models_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "models")
+    model_path = os.path.join(models_dir, f"{model_name}.joblib")
+    vectorizer_path = os.path.join(models_dir, f"{model_name}_vectorizer.joblib")
     
-    # Vektörizeri yükle
-    vectorizer = joblib.load(os.path.join(model_path, 'vectorizer.joblib'))
+    if not os.path.exists(model_path) or not os.path.exists(vectorizer_path):
+        raise FileNotFoundError("Model veya vektörleştirici dosyası bulunamadı.")
+    
+    model = joblib.load(model_path)
+    vectorizer = joblib.load(vectorizer_path)
+    
+    logging.info(f"Model yüklendi: {model_path}")
+    logging.info(f"Vektörleştirici yüklendi: {vectorizer_path}")
     
     return model, vectorizer

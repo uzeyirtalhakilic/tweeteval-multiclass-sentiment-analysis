@@ -1,74 +1,125 @@
 """
-Model değerlendirme modülü.
-Bu modül, eğitilmiş modelin performansını değerlendirmek için gerekli fonksiyonları içerir.
+Bu modül, tweet_eval veri seti için model değerlendirme fonksiyonlarını içerir.
 """
 
-from sklearn.metrics import classification_report, confusion_matrix
-from sklearn.model_selection import cross_val_score
-import seaborn as sns
-import matplotlib.pyplot as plt
+import logging
 import json
 import os
+import pandas as pd
+import seaborn as sns
+import matplotlib.pyplot as plt
+from sklearn.metrics import classification_report, confusion_matrix
+from datetime import datetime
+from sklearn.model_selection import cross_val_score
 
-def evaluate_model(y_test, y_pred, labels=["negative", "neutral", "positive"]):
+# Logging ayarları
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+def evaluate_model(y_true, y_pred, model_name="model"):
     """
-    Model performansını değerlendirir ve sonuçları görselleştirir.
+    Model performansını değerlendirir ve sonuçları kaydeder.
     
-    Parametreler:
-        y_test: Gerçek etiketler
-        y_pred: Model tahminleri
-        labels: Sınıf etiketleri
+    Args:
+        y_true: Gerçek etiketler
+        y_pred: Tahmin edilen etiketler
+        model_name: Model adı (sonuç dosyaları için)
         
-    Çıktılar:
-        - Sınıflandırma raporu (precision, recall, f1-score)
-        - Karmaşıklık matrisi grafiği (confusion matrix)
-        - Performans metrikleri JSON dosyası
+    Returns:
+        Sınıflandırma raporu
     """
-    # Sınıflandırma raporunu hesapla ve yazdır
-    report = classification_report(y_test, y_pred, output_dict=True)
-    print(classification_report(y_test, y_pred))
+    # Sınıf isimleri
+    labels = ['negative', 'neutral', 'positive']
     
-    # Karmaşıklık matrisini oluştur
-    cm = confusion_matrix(y_test, y_pred, labels=labels)
+    # Sınıflandırma raporu
+    report = classification_report(y_true, y_pred, target_names=labels, output_dict=True)
     
-    # Grafik boyutunu ayarla
-    plt.figure(figsize=(10, 8))
+    # Sonuçları yazdır
+    print(f"\n{model_name} Sınıflandırma Raporu:")
+    print(classification_report(y_true, y_pred, target_names=labels))
     
-    # Karmaşıklık matrisini görselleştir
-    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues',
-                xticklabels=labels, yticklabels=labels)
-    plt.xlabel("Tahmin Edilen")
-    plt.ylabel("Gerçek")
-    plt.title("Karmaşıklık Matrisi")
+    # Karmaşıklık matrisi
+    cm = confusion_matrix(y_true, y_pred)
     
-    # Grafiği kaydet
-    os.makedirs('results', exist_ok=True)
-    plt.savefig('results/confusion_matrix.png')
-    plt.close()
+    # Sonuçları kaydet
+    results_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "results")
+    os.makedirs(results_dir, exist_ok=True)
     
     # Performans metriklerini kaydet
-    with open('results/metrics.json', 'w') as f:
+    metrics_path = os.path.join(results_dir, f"performance_metrics_{model_name}.json")
+    with open(metrics_path, 'w') as f:
         json.dump(report, f, indent=4)
+    logging.info(f"Performans metrikleri kaydedildi: {metrics_path}")
+    
+    # Karmaşıklık matrisini görselleştir ve kaydet
+    plt.figure(figsize=(10, 8))
+    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues',
+                xticklabels=labels, yticklabels=labels)
+    plt.title(f'Confusion Matrix - {model_name}')
+    plt.ylabel('True Label')
+    plt.xlabel('Predicted Label')
+    
+    cm_path = os.path.join(results_dir, f"confusion_matrix_{model_name}.png")
+    plt.savefig(cm_path)
+    plt.close()
+    logging.info(f"Karmaşıklık matrisi kaydedildi: {cm_path}")
+    
+    return report
+
+def compare_models(results):
+    """
+    Modellerin performanslarını karşılaştırır ve sonuçları kaydeder.
+    
+    Args:
+        results: Model sonuçları sözlüğü
+        
+    Returns:
+        Karşılaştırma tablosu
+    """
+    # Karşılaştırma tablosu oluştur
+    comparison_data = []
+    
+    for model_name, report in results.items():
+        comparison_data.append({
+            'Model': model_name,
+            'Accuracy': report['accuracy'],
+            'F1-Score': report['weighted avg']['f1-score'],
+            'Precision': report['weighted avg']['precision'],
+            'Recall': report['weighted avg']['recall']
+        })
+    
+    comparison = pd.DataFrame(comparison_data)
+    
+    # Sonuçları kaydet
+    results_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "results")
+    comparison_path = os.path.join(results_dir, "model_comparison.csv")
+    comparison.to_csv(comparison_path, index=False)
+    logging.info(f"Model karşılaştırma tablosu kaydedildi: {comparison_path}")
+    
+    # Karşılaştırma grafiği
+    plt.figure(figsize=(12, 6))
+    comparison.set_index('Model')[['Accuracy', 'F1-Score', 'Precision', 'Recall']].plot(kind='bar')
+    plt.title('Model Performance Comparison')
+    plt.ylabel('Score')
+    plt.xticks(rotation=45)
+    plt.tight_layout()
+    
+    graph_path = os.path.join(results_dir, "model_comparison.png")
+    plt.savefig(graph_path)
+    plt.close()
+    logging.info(f"Model karşılaştırma grafiği kaydedildi: {graph_path}")
+    
+    return comparison
 
 def cross_validate_model(model, X, y, cv=5):
     """
     Modeli çapraz doğrulama ile değerlendirir.
     
-    Parametreler:
+    Args:
         model: Değerlendirilecek model
         X: Özellikler
         y: Etiketler
         cv: Çapraz doğrulama katlama sayısı
-        
-    Çıktılar:
-        - Her katlama için doğruluk skorları
-        - Ortalama doğruluk ve standart sapma
     """
-    # Çapraz doğrulama skorlarını hesapla
-    scores = cross_val_score(model, X, y, cv=cv)
-    
-    # Sonuçları yazdır
-    print(f"Çapraz doğrulama skorları: {scores}")
-    print(f"Ortalama doğruluk: {scores.mean():.3f} (+/- {scores.std() * 2:.3f})")
-    
-    return scores
+    scores = cross_val_score(model, X, y, cv=cv, scoring='accuracy')
+    print(f"\nÇapraz Doğrulama Sonuçları ({cv}-fold):")
+    print(f"Ortalama Doğruluk: {scores.mean():.3f} (+/- {scores.std() * 2:.3f})")
