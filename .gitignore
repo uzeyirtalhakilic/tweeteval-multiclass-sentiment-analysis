@@ -1,3 +1,66 @@
-data/
+# Python
 __pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Jupyter Notebook
+.ipynb_checkpoints
+*/.ipynb_checkpoints/*
+
+# VS Code
+.vscode/
+*.code-workspace
+
+# PyCharm
+.idea/
+*.iml
+*.iws
+.idea_modules/
+
+# Model ve veri dosyaları
+models/*.joblib
+models/*.pkl
+models/*.h5
+models/*.pt
+models/*.pth
+
+# Sonuç dosyaları
+results/*.png
+results/*.csv
+results/*.json
+
+# Log dosyaları
+*.log
+logs/
+log/
+
+# Çevre değişkenleri
+.env
+.venv
+env/
+venv/
+ENV/
+
+# Sistem dosyaları
+.DS_Store
+Thumbs.db
+
+#Log
 logs.txt
